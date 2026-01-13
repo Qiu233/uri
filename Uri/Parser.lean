@@ -1,0 +1,265 @@
+module
+
+public import Std.Internal.Parsec.String
+public import Uri.Basic
+
+namespace Uri.Parser
+
+open Std.Internal.Parsec
+open Std.Internal.Parsec.String
+
+@[always_inline]
+def digitRange (lo hi : Char) : Parser Char :=
+  satisfy fun c => c >= lo && c <= hi
+
+def unreserved : Parser Char := satisfy fun c => c.isAlphanum || c matches '-' | '.' | '_' | '~'
+
+def gen_delims : Parser Char := satisfy fun c => c matches ':' | '/' | '?' | '#' | '[' | ']' | '@'
+
+def sub_delims : Parser Char := satisfy fun c => c matches '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
+
+def reserved : Parser Char := gen_delims <|> sub_delims
+
+def decode_hex : Char → Nat := fun c =>
+  if c.isDigit then
+    (c.toNat - '0'.toNat)
+  else if 'A' ≤ c && c ≤ 'F' then
+    (c.toNat - 'A'.toNat + 10)
+  else if 'a' ≤ c && c ≤ 'f' then
+    (c.toNat - 'a'.toNat + 10)
+  else
+    panic! "invalid character"
+
+def pct_encoded : Parser Char := do
+  skipChar '%'
+  let a ← decode_hex <$> hexDigit
+  let b ← decode_hex <$> hexDigit
+  let h := a * 16 + b
+  return Char.ofNat h
+
+def pchar' : Parser Char := unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches ':' | '@'
+
+def scheme : Parser String := do
+  let l ← satisfy Char.isAlpha
+  let t ← manyChars (satisfy fun c => c.isAlphanum || c matches '+' | '-' | '.')
+  return String.ofList (l :: t.toList)
+
+@[always_inline]
+def segment : Parser String := manyChars pchar'
+
+@[always_inline]
+def segment_nz : Parser String := many1Chars pchar'
+
+@[always_inline]
+def segment_nz_nc : Parser String := many1Chars <| unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches '@'
+
+def path_abempty : Parser String := do
+  let xs ← many (skipChar '/' *> segment)
+  let xs := xs.map fun x => s!"/{x}"
+  return String.intercalate "" xs.toList
+
+def path_absolute : Parser String := do
+  skipChar '/'
+  match ← optional segment_nz with
+  | none => return "/"
+  | some l =>
+    let l := s!"/{l}"
+    let xs ← many (skipChar '/' *> segment)
+    let xs := xs.map fun x => s!"/{x}"
+    let xs := l :: xs.toList
+    return String.intercalate "" xs
+
+def path_noscheme : Parser String := do
+  let l ← segment_nz_nc
+  let xs ← many (skipChar '/' *> segment)
+  let xs := xs.map fun x => s!"/{x}"
+  let xs := l :: xs.toList
+  return String.intercalate "" xs
+
+def path_rootless : Parser String := do
+  let l ← segment_nz
+  let xs ← many (skipChar '/' *> segment)
+  let xs := xs.map fun x => s!"/{x}"
+  let xs := l :: xs.toList
+  return String.intercalate "" xs
+
+def userinfo : Parser String := do
+  manyChars <| unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches ':'
+
+@[inline]
+def takeUpTo (n : Nat) (p : Parser α) : Parser (Array α) :=
+  rest n #[]
+where
+  rest : Nat → Array α → Parser (Array α)
+    | 0, xs => return xs
+    | n+1, xs => do
+      match ← optional (attempt p) with
+      | some x => rest n <| xs.push x
+      | none => return xs
+
+@[inline]
+def take (n : Nat) (p : Parser α) : Parser (Array α) := attempt <| rest n #[]
+where
+  rest : Nat → Array α → Parser (Array α)
+    | 0, xs => return xs
+    | n+1, xs => do rest n <| xs.push (← p)
+
+def h16 : Parser UInt16 := do
+  let first ← hexDigit
+  let rest ← takeUpTo 3 hexDigit
+  let xs := first :: rest.toList
+  let xs := xs.map decode_hex
+  let x :: xs := xs | unreachable!
+  let val := xs.foldl (init := x) fun acc x => acc * 16 + x
+  assert! val < 2 ^ 16
+  return UInt16.ofNat val
+
+def dec_octet : Parser UInt8 := do
+  let s ← many1Chars digit
+  if s.length > 1 && s.startsWith "0" then
+    fail "leading zeros are not valid in IPv4 octets"
+  if s.length > 3 then
+    fail "IPv4 octet is too long"
+  let ts := s.toList.map fun x => x.toNat - '0'.toNat
+  let t :: ts := ts | unreachable!
+  let val := ts.foldl (init := t) fun acc t => acc * 10 + t
+  if val > 255 then
+    fail "IPv4 octet is out of range"
+  return UInt8.ofNat val
+
+def ipv4address : Parser Std.Net.IPv4Addr := do
+  let a ← dec_octet
+  skipChar '.'
+  let b ← dec_octet
+  skipChar '.'
+  let c ← dec_octet
+  skipChar '.'
+  let d ← dec_octet
+  return Std.Net.IPv4Addr.ofParts a b c d
+
+def ls32 : Parser (UInt16 × UInt16) :=
+  (attempt do
+    let a ← h16
+    skipChar ':'
+    let b ← h16
+    return (a, b))
+    <|> (ipv4address >>= fun x => return (x.octets[0].toUInt16 * (256 : UInt16) + x.octets[1].toUInt16, x.octets[2].toUInt16 * (256 : UInt16) + x.octets[3].toUInt16))
+
+@[always_inline]
+private def char : Char → Parser Char := fun c => satisfy (· == c)
+
+def sep1 (x : Parser α) (s : Parser Unit) : Parser (Array α) := do
+  let l ← x
+  let mut t := #[l]
+  repeat
+    if let some v ← optional (attempt (s *> x)) then
+      t := t.push v
+    else break
+  return t
+
+def sep1UpTo (n : Nat) (x : Parser α) (s : Parser Unit) : Parser (Array α) := do
+  let l ← x
+  let mut t := #[l]
+  repeat
+    if t.size ≥ n then break
+    if let some v ← optional (attempt (s *> x)) then
+      t := t.push v
+    else break
+  return t
+
+def sepUpTo (n : Nat) (x : Parser α) (s : Parser Unit) : Parser (Array α) := attempt (sep1UpTo n x s) <|> (pure #[])
+
+def ipv6address : Parser Std.Net.IPv6Addr := do
+  let ret (t : Array UInt16) := do
+    if h : t.size = 8 then
+      return { segments := ⟨t, h⟩ : Std.Net.IPv6Addr }
+    else
+      unreachable!
+  let t ← sepUpTo 8 (h16 <* notFollowedBy (char '.')) (skipChar ':')
+  if t.size == 8 then
+    ret t
+  else if t.size == 7 then
+    skipString "::"
+    ret <| t.push 0
+  else if t.size == 6 then
+    (do
+      skipString "::"
+      let a ← h16
+      ret <| t.push 0 |>.push a)
+    <|> (do
+      skipChar ':'
+      let (a, b) ← ls32 -- ipv4
+      ret <| t.push a |>.push b)
+  else
+    skipString "::"
+    let r ← sepUpTo (7 - t.size) (h16  <* notFollowedBy (char '.')) (skipChar ':')
+    if r.size == 7 - t.size then
+      ret <| t.push 0 |>.append r
+    else if r.size == 6 - t.size then
+      ret <| t.append #[0, 0] |>.append r
+    else
+      (attempt do
+        skipChar ':'
+        let (a, b) ← ls32 -- ipv4
+        let pad := 8 - t.size - r.size - 2
+        ret <| t.append (Array.replicate pad 0) |>.append r |>.append #[a, b])
+      <|> (do
+        let pad := 8 - t.size - r.size
+        ret <| t.append (Array.replicate pad 0) |>.append r)
+
+def ipv_future : Parser String := do
+  skipChar 'v'
+  let version ← many1Chars hexDigit
+  skipChar '.'
+  let body ← many1Chars (unreserved <|> sub_delims <|> char ':')
+  return "v" ++ version ++ "." ++ body
+
+def ip_literal : Parser Host := do
+  let _ ← char '['
+  let inner ← attempt (Host.ipv6 <$> ipv6address) <|> Host.ipvFuture <$> ipv_future
+  let _ ← char ']'
+  return inner
+
+def reg_name : Parser String := manyChars (unreserved <|> pct_encoded <|> sub_delims)
+
+public def host : Parser Host :=
+  attempt ip_literal
+  <|> (attempt (Host.ipv4 <$> ipv4address))
+  <|> (Host.regName <$> reg_name)
+
+def port : Parser String := manyChars (satisfy Char.isDigit)
+
+public def authority : Parser Authority := do
+  let ui? ← optional <| attempt (userinfo <* skipChar '@')
+  let host ← host
+  let port? ← optional <| attempt (skipChar ':' *> port)
+  return { userInfo := ui?.getD "", host, port := port?.getD "" }
+
+public def hier_part : Parser (Option Authority × String) := do
+  let ss := do
+    skipString "//"
+    let auth ← authority
+    let path ← path_abempty
+    return (some auth, path)
+  ss <|> (path_absolute <&> (none, ·)) <|> (path_rootless <&> (none, ·)) <|> (pure (none, ""))
+
+def query : Parser String := manyChars (pchar' <|> char '/' <|> char '?')
+
+def fragment : Parser String := manyChars (pchar' <|> char '/' <|> char '?')
+
+public def uri : Parser Uri := do
+  let scheme ← scheme
+  skipChar ':'
+  let (auth?, path) ← hier_part
+  let query? ← optional do
+    skipChar '?'
+    query
+  let fragment? ← optional do
+    skipChar '#'
+    fragment
+  return { scheme, path, authority? := auth?, query := query?.getD "", fragment := fragment?.getD "" }
+
+end Uri.Parser
+
+open Std.Internal.Parsec Std.Internal.Parsec.String in
+public def Uri.parse : String → Except String Uri := fun s => Parser.run (Parser.uri <* eof) s
