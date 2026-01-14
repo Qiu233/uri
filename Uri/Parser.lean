@@ -3,6 +3,10 @@ module
 public import Std.Internal.Parsec.String
 public import Uri.Basic
 
+/-!
+[RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986)
+-/
+
 namespace Uri.Parser
 
 open Std.Internal.Parsec
@@ -227,13 +231,24 @@ public def host : Parser Host :=
   <|> (attempt (Host.ipv4 <$> ipv4address))
   <|> (Host.regName <$> reg_name)
 
-def port : Parser String := manyChars (satisfy Char.isDigit)
+def port? : Parser (Option UInt16) := do
+  let v ← manyChars (satisfy Char.isDigit)
+  if v.length == 0 then
+    return none
+  let xs := v.toList
+  let xs := xs.map fun x => x.toNat - '0'.toNat
+  let x :: xs := xs | unreachable!
+  let val := xs.foldl (init := x) fun acc t => acc * 10 + t
+  if val ≥ 2 ^ 16 then
+    fail "port too large"
+  return some (UInt16.ofNat val)
 
 public def authority : Parser Authority := do
   let ui? ← optional <| attempt (userinfo <* skipChar '@')
   let host ← host
-  let port? ← optional <| attempt (skipChar ':' *> port)
-  return { userInfo := ui?.getD "", host, port := port?.getD "" }
+  let port? ← optional <| attempt (skipChar ':' *> port?)
+  let port? := port?.join
+  return { userInfo? := ui?, host, port? }
 
 public def hier_part : Parser (Option Authority × String) := do
   let ss := do
@@ -257,7 +272,7 @@ public def uri : Parser Uri := do
   let fragment? ← optional do
     skipChar '#'
     fragment
-  return { scheme, path, authority? := auth?, query := query?.getD "", fragment := fragment?.getD "" }
+  return { scheme, path, authority? := auth?, query?, fragment? }
 
 end Uri.Parser
 

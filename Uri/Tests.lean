@@ -23,12 +23,12 @@ private def expectHost (label input : String) (expectedHost : Uri.Host) (expecte
   | .ok uri =>
       assertEq (label ++ ": scheme") uri.scheme "http"
       assertEq (label ++ ": path") uri.path expectedPath
-      assertEq (label ++ ": query") uri.query ""
-      assertEq (label ++ ": fragment") uri.fragment ""
+      assertEq (label ++ ": query") uri.query? none
+      assertEq (label ++ ": fragment") uri.fragment? none
       match uri.authority? with
       | some auth =>
-          assertEq (label ++ ": userinfo") auth.userInfo ""
-          assertEq (label ++ ": port") auth.port ""
+          assertEq (label ++ ": userinfo") auth.userInfo? none
+          assertEq (label ++ ": port") auth.port? none
           assert (hostEq auth.host expectedHost) s!"{label}: host mismatch"
       | none => throw <| IO.userError s!"{label}: missing authority"
   | .error err => throw <| IO.userError s!"{label}: parse error: {err}"
