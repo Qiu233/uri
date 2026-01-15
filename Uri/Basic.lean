@@ -24,9 +24,9 @@ public structure Uri where
   authority? : Option Uri.Authority
   path : String
   /-- Query part without the leading `?`, for example `a=1` in `https://127.0.0.1?a=1` -/
-  query? : Option String
+  query? : Option String := Option.none
   /-- Fragment part without the leading `#`, for example `Title` in `https://127.0.0.1#Title` -/
-  fragment? : Option String
+  fragment? : Option String := Option.none
 deriving Inhabited
 
 public def Uri.Host.toString (host : Uri.Host) : String :=
