@@ -16,8 +16,11 @@ public structure Uri.Authority where
 deriving Inhabited
 
 public structure Uri where
-  /-- The scheme without trailing colon, for example `https` in `https://...` -/
-  scheme : String
+  /-- The scheme without trailing colon, for example `https` in `https://...`.
+
+      `none` when parsing `relative-ref`.
+   -/
+  scheme? : Option String
   authority? : Option Uri.Authority
   path : String
   /-- Query part without the leading `?`, for example `a=1` in `https://127.0.0.1?a=1` -/
@@ -44,8 +47,11 @@ public def Uri.Authority.toString (auth : Uri.Authority) : String :=
       | some x => s!":{x}"
 
 public def Uri.toString (uri : Uri) : String :=
-  s!"{uri.scheme}:{auth}{uri.path}{q}{f}"
+  s!"{scheme}:{auth}{uri.path}{q}{f}"
   where
+    scheme := match uri.scheme? with
+      | none => ""
+      | some a => s!"{a}:"
     auth := match uri.authority? with
       | none => ""
       | some a => s!"//{a.toString}"

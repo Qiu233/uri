@@ -21,7 +21,7 @@ private def hostEq : Uri.Host → Uri.Host → Bool
 private def expectHost (label input : String) (expectedHost : Uri.Host) (expectedPath : String := "/") : IO Unit := do
   match Uri.parse input with
   | .ok uri =>
-      assertEq (label ++ ": scheme") uri.scheme "http"
+      assertEq (label ++ ": scheme") uri.scheme? (some "http")
       assertEq (label ++ ": path") uri.path expectedPath
       assertEq (label ++ ": query") uri.query? none
       assertEq (label ++ ": fragment") uri.fragment? none
@@ -61,7 +61,7 @@ def main : IO Unit := do
 
   match Uri.parse "mailto:foo:bar" with
   | .ok uri =>
-      assertEq "rootless-colon scheme" uri.scheme "mailto"
+      assertEq "rootless-colon scheme" uri.scheme? (some "mailto")
       assertEq "rootless-colon path" uri.path "foo:bar"
       match uri.authority? with
       | none => pure ()

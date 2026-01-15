@@ -7,13 +7,15 @@ public import Uri.Basic
 [RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986)
 -/
 
+public section
+
 namespace Uri.Parser
 
 open Std.Internal.Parsec
 open Std.Internal.Parsec.String
 
 @[always_inline]
-def digitRange (lo hi : Char) : Parser Char :=
+private def digitRange (lo hi : Char) : Parser Char :=
   satisfy fun c => c >= lo && c <= hi
 
 def unreserved : Parser Char := satisfy fun c => c.isAlphanum || c matches '-' | '.' | '_' | '~'
@@ -24,7 +26,7 @@ def sub_delims : Parser Char := satisfy fun c => c matches '!' | '$' | '&' | '\'
 
 def reserved : Parser Char := gen_delims <|> sub_delims
 
-def decode_hex : Char → Nat := fun c =>
+private def decode_hex : Char → Nat := fun c =>
   if c.isDigit then
     (c.toNat - '0'.toNat)
   else if 'A' ≤ c && c ≤ 'F' then
@@ -272,7 +274,34 @@ public def uri : Parser Uri := do
   let fragment? ← optional do
     skipChar '#'
     fragment
-  return { scheme, path, authority? := auth?, query?, fragment? }
+  return { scheme? := some scheme, path, authority? := auth?, query?, fragment? }
+
+def absolute_uri : Parser Uri := do
+  let scheme ← scheme
+  skipChar ':'
+  let (auth?, path) ← hier_part
+  let query? ← optional do
+    skipChar '?'
+    query
+  return { scheme? := some scheme, path, authority? := auth?, query?, fragment? := none }
+
+def relative_part : Parser (Option Authority × String) := do
+  let ss := do
+    skipString "//"
+    let auth ← authority
+    let path ← path_abempty
+    return (some auth, path)
+  ss <|> (path_absolute <&> (none, ·)) <|> (path_noscheme <&> (none, ·)) <|> (pure (none, ""))
+
+def relative_ref : Parser Uri := do
+  let (auth?, path) ← relative_part
+  let query? ← optional do
+    skipChar '?'
+    query
+  let fragment? ← optional do
+    skipChar '#'
+    fragment
+  return { scheme? := none, path, authority? := auth?, query?, fragment? }
 
 end Uri.Parser
 
