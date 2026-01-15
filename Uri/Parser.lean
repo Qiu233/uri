@@ -363,4 +363,7 @@ def relative_ref : m Uri := do
     fragment
   return { scheme? := none, path, authority? := auth?, query?, fragment? }
 
+@[always_inline, specialize]
+def uri_reference : m Uri := attempt uri <|> relative_ref
+
 end Uri.Parser
