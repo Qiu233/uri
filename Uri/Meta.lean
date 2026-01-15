@@ -1,7 +1,7 @@
 module
 
 public meta import Lean
-public meta import Uri.Parser
+public meta import Uri.Parse
 
 /-!
 Compile-time uri literal elaboration.
@@ -158,7 +158,8 @@ def quoteAuth (auth : Uri.Authority) : Term.TermElabM Term := do
   `({ userInfo? := $ui, host := $host, port? := $port : Uri.Authority })
 
 def quoteUri (uri : Uri) : Term.TermElabM Term := do
-  let scheme : TSyntax `str := quote uri.scheme
+  if uri.scheme?.isNone then throwError "impossible: scheme? is none"
+  let scheme : TSyntax `str := quote uri.scheme?.get!
   let auth ← uri.authority?.mapM quoteAuth
   let auth ← auth.mapM fun x => `(Option.some $x)
   let auth ← auth.getDM `(Option.none)
@@ -169,7 +170,7 @@ def quoteUri (uri : Uri) : Term.TermElabM Term := do
   let fragment ← match uri.fragment? with
     | none => `(Option.none)
     | some x => `(Option.some $(quote x))
-  `({ scheme := $scheme, authority? := $auth, path := $path, query? := $query, fragment? := $fragment : Uri })
+  `({ scheme? := Option.some $scheme, authority? := $auth, path := $path, query? := $query, fragment? := $fragment : Uri })
 
 @[term_elab Uri.Parser.uriQuot]
 def elabUriQuot : Term.TermElab := fun stx type? => do
