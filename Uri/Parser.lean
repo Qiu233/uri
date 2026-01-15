@@ -1,30 +1,61 @@
 module
 
-public import Std.Internal.Parsec.String
 public import Uri.Basic
 
 /-!
 [RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986)
+
 -/
 
 public section
 
 namespace Uri.Parser
 
-open Std.Internal.Parsec
-open Std.Internal.Parsec.String
+/-- The primitive effects required to implement uri parser. Some of them are overlapping for performance. -/
+class MonadParser (m : Type → Type) where
+  satisfy : (Char → Bool) → m Char
+  skipChar : Char → m Unit
+  skipString : String → m Unit
+  attempt : m α → m α
+  optional : m α → m (Option α)
+  many : m α → m (Array α)
+  many1 : m α → m (Array α)
+  fail : String → m α
+  notFollowedBy : m α → m Unit
 
-@[always_inline]
-private def digitRange (lo hi : Char) : Parser Char :=
+variable [Monad m] [∀ α, OrElse (m α)] [MonadParser m]
+
+open MonadParser
+
+@[always_inline, specialize]
+private def digitRange (lo hi : Char) : m Char :=
   satisfy fun c => c >= lo && c <= hi
 
-def unreserved : Parser Char := satisfy fun c => c.isAlphanum || c matches '-' | '.' | '_' | '~'
+@[always_inline, specialize]
+private def manyChars (x : m Char) : m String := do
+  let cs ← many x
+  return String.ofList cs.toList
 
-def gen_delims : Parser Char := satisfy fun c => c matches ':' | '/' | '?' | '#' | '[' | ']' | '@'
+@[always_inline, specialize]
+private def many1Chars (x : m Char) : m String := do
+  let cs ← many1 x
+  return String.ofList cs.toList
 
-def sub_delims : Parser Char := satisfy fun c => c matches '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
+@[always_inline, specialize]
+private def hexDigit : m Char := satisfy fun c =>
+  c.isDigit || ('A' ≤ c && c ≤ 'F') || ('a' ≤ c && c ≤ 'f')
 
-def reserved : Parser Char := gen_delims <|> sub_delims
+@[always_inline, specialize]
+def unreserved : m Char := satisfy fun c => c.isAlphanum || c matches '-' | '.' | '_' | '~'
+
+@[always_inline, specialize]
+def gen_delims : m Char := satisfy fun c => c matches ':' | '/' | '?' | '#' | '[' | ']' | '@'
+
+@[always_inline, specialize]
+def sub_delims : m Char := satisfy fun c => c matches '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
+
+@[always_inline, specialize]
+def reserved : m Char := gen_delims <|> sub_delims
 
 private def decode_hex : Char → Nat := fun c =>
   if c.isDigit then
@@ -36,35 +67,40 @@ private def decode_hex : Char → Nat := fun c =>
   else
     panic! "invalid character"
 
-def pct_encoded : Parser Char := do
+@[specialize]
+def pct_encoded : m Char := do
   skipChar '%'
   let a ← decode_hex <$> hexDigit
   let b ← decode_hex <$> hexDigit
   let h := a * 16 + b
   return Char.ofNat h
 
-def pchar' : Parser Char := unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches ':' | '@'
+@[specialize]
+def pchar' : m Char := unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches ':' | '@'
 
-def scheme : Parser String := do
+@[specialize]
+def scheme : m String := do
   let l ← satisfy Char.isAlpha
   let t ← manyChars (satisfy fun c => c.isAlphanum || c matches '+' | '-' | '.')
   return String.ofList (l :: t.toList)
 
-@[always_inline]
-def segment : Parser String := manyChars pchar'
+@[always_inline, specialize]
+def segment : m String := manyChars pchar'
 
-@[always_inline]
-def segment_nz : Parser String := many1Chars pchar'
+@[always_inline, specialize]
+def segment_nz : m String := many1Chars pchar'
 
-@[always_inline]
-def segment_nz_nc : Parser String := many1Chars <| unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches '@'
+@[always_inline, specialize]
+def segment_nz_nc : m String := many1Chars <| unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches '@'
 
-def path_abempty : Parser String := do
+@[specialize]
+def path_abempty : m String := do
   let xs ← many (skipChar '/' *> segment)
   let xs := xs.map fun x => s!"/{x}"
   return String.intercalate "" xs.toList
 
-def path_absolute : Parser String := do
+@[specialize]
+def path_absolute : m String := do
   skipChar '/'
   match ← optional segment_nz with
   | none => return "/"
@@ -75,42 +111,46 @@ def path_absolute : Parser String := do
     let xs := l :: xs.toList
     return String.intercalate "" xs
 
-def path_noscheme : Parser String := do
+@[specialize]
+def path_noscheme : m String := do
   let l ← segment_nz_nc
   let xs ← many (skipChar '/' *> segment)
   let xs := xs.map fun x => s!"/{x}"
   let xs := l :: xs.toList
   return String.intercalate "" xs
 
-def path_rootless : Parser String := do
+@[specialize]
+def path_rootless : m String := do
   let l ← segment_nz
   let xs ← many (skipChar '/' *> segment)
   let xs := xs.map fun x => s!"/{x}"
   let xs := l :: xs.toList
   return String.intercalate "" xs
 
-def userinfo : Parser String := do
+@[inline, specialize]
+def userinfo : m String := do
   manyChars <| unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches ':'
 
-@[inline]
-def takeUpTo (n : Nat) (p : Parser α) : Parser (Array α) :=
+@[inline, specialize]
+private def takeUpTo (n : Nat) (p : m α) : m (Array α) :=
   rest n #[]
 where
-  rest : Nat → Array α → Parser (Array α)
+  rest : Nat → Array α → m (Array α)
     | 0, xs => return xs
     | n+1, xs => do
       match ← optional (attempt p) with
       | some x => rest n <| xs.push x
       | none => return xs
 
-@[inline]
-def take (n : Nat) (p : Parser α) : Parser (Array α) := attempt <| rest n #[]
+@[inline, specialize]
+def take (n : Nat) (p : m α) : m (Array α) := attempt <| rest n #[]
 where
-  rest : Nat → Array α → Parser (Array α)
+  rest : Nat → Array α → m (Array α)
     | 0, xs => return xs
     | n+1, xs => do rest n <| xs.push (← p)
 
-def h16 : Parser UInt16 := do
+@[specialize]
+def h16 : m UInt16 := do
   let first ← hexDigit
   let rest ← takeUpTo 3 hexDigit
   let xs := first :: rest.toList
@@ -120,8 +160,9 @@ def h16 : Parser UInt16 := do
   assert! val < 2 ^ 16
   return UInt16.ofNat val
 
-def dec_octet : Parser UInt8 := do
-  let s ← many1Chars digit
+@[specialize]
+def dec_octet : m UInt8 := do
+  let s ← many1Chars <| satisfy fun c => c.isDigit
   if s.length > 1 && s.startsWith "0" then
     fail "leading zeros are not valid in IPv4 octets"
   if s.length > 3 then
@@ -133,7 +174,8 @@ def dec_octet : Parser UInt8 := do
     fail "IPv4 octet is out of range"
   return UInt8.ofNat val
 
-def ipv4address : Parser Std.Net.IPv4Addr := do
+@[specialize]
+def ipv4address : m Std.Net.IPv4Addr := do
   let a ← dec_octet
   skipChar '.'
   let b ← dec_octet
@@ -143,7 +185,8 @@ def ipv4address : Parser Std.Net.IPv4Addr := do
   let d ← dec_octet
   return Std.Net.IPv4Addr.ofParts a b c d
 
-def ls32 : Parser (UInt16 × UInt16) :=
+@[specialize]
+def ls32 : m (UInt16 × UInt16) :=
   (attempt do
     let a ← h16
     skipChar ':'
@@ -151,10 +194,11 @@ def ls32 : Parser (UInt16 × UInt16) :=
     return (a, b))
     <|> (ipv4address >>= fun x => return (x.octets[0].toUInt16 * (256 : UInt16) + x.octets[1].toUInt16, x.octets[2].toUInt16 * (256 : UInt16) + x.octets[3].toUInt16))
 
-@[always_inline]
-private def char : Char → Parser Char := fun c => satisfy (· == c)
+@[always_inline, specialize]
+private def char : Char → m Char := fun c => satisfy (· == c)
 
-def sep1 (x : Parser α) (s : Parser Unit) : Parser (Array α) := do
+@[specialize]
+private def sep1 (x : m α) (s : m Unit) : m (Array α) := do
   let l ← x
   let mut t := #[l]
   repeat
@@ -163,7 +207,8 @@ def sep1 (x : Parser α) (s : Parser Unit) : Parser (Array α) := do
     else break
   return t
 
-def sep1UpTo (n : Nat) (x : Parser α) (s : Parser Unit) : Parser (Array α) := do
+@[specialize]
+private def sep1UpTo (n : Nat) (x : m α) (s : m Unit) : m (Array α) := do
   let l ← x
   let mut t := #[l]
   repeat
@@ -173,9 +218,11 @@ def sep1UpTo (n : Nat) (x : Parser α) (s : Parser Unit) : Parser (Array α) := 
     else break
   return t
 
-def sepUpTo (n : Nat) (x : Parser α) (s : Parser Unit) : Parser (Array α) := attempt (sep1UpTo n x s) <|> (pure #[])
+@[specialize]
+private def sepUpTo (n : Nat) (x : m α) (s : m Unit) : m (Array α) := attempt (sep1UpTo n x s) <|> (pure #[])
 
-def ipv6address : Parser Std.Net.IPv6Addr := do
+@[specialize]
+def ipv6address : m Std.Net.IPv6Addr := do
   let ret (t : Array UInt16) := do
     if h : t.size = 8 then
       return { segments := ⟨t, h⟩ : Std.Net.IPv6Addr }
@@ -213,27 +260,32 @@ def ipv6address : Parser Std.Net.IPv6Addr := do
         let pad := 8 - t.size - r.size
         ret <| t.append (Array.replicate pad 0) |>.append r)
 
-def ipv_future : Parser String := do
+@[specialize]
+def ipv_future : m String := do
   skipChar 'v'
   let version ← many1Chars hexDigit
   skipChar '.'
   let body ← many1Chars (unreserved <|> sub_delims <|> char ':')
   return "v" ++ version ++ "." ++ body
 
-def ip_literal : Parser Host := do
+@[specialize]
+def ip_literal : m Host := do
   let _ ← char '['
   let inner ← attempt (Host.ipv6 <$> ipv6address) <|> Host.ipvFuture <$> ipv_future
   let _ ← char ']'
   return inner
 
-def reg_name : Parser String := manyChars (unreserved <|> pct_encoded <|> sub_delims)
+@[specialize]
+def reg_name : m String := manyChars (unreserved <|> pct_encoded <|> sub_delims)
 
-public def host : Parser Host :=
+@[specialize]
+public def host : m Host :=
   attempt ip_literal
   <|> (attempt (Host.ipv4 <$> ipv4address))
   <|> (Host.regName <$> reg_name)
 
-def port? : Parser (Option UInt16) := do
+@[specialize]
+def port? : m (Option UInt16) := do
   let v ← manyChars (satisfy Char.isDigit)
   if v.length == 0 then
     return none
@@ -245,14 +297,16 @@ def port? : Parser (Option UInt16) := do
     fail "port too large"
   return some (UInt16.ofNat val)
 
-public def authority : Parser Authority := do
+@[specialize]
+public def authority : m Authority := do
   let ui? ← optional <| attempt (userinfo <* skipChar '@')
   let host ← host
   let port? ← optional <| attempt (skipChar ':' *> port?)
   let port? := port?.join
   return { userInfo? := ui?, host, port? }
 
-public def hier_part : Parser (Option Authority × String) := do
+@[specialize]
+public def hier_part : m (Option Authority × String) := do
   let ss := do
     skipString "//"
     let auth ← authority
@@ -260,11 +314,14 @@ public def hier_part : Parser (Option Authority × String) := do
     return (some auth, path)
   ss <|> (path_absolute <&> (none, ·)) <|> (path_rootless <&> (none, ·)) <|> (pure (none, ""))
 
-def query : Parser String := manyChars (pchar' <|> char '/' <|> char '?')
+@[always_inline, specialize]
+def query : m String := manyChars (pchar' <|> char '/' <|> char '?')
 
-def fragment : Parser String := manyChars (pchar' <|> char '/' <|> char '?')
+@[always_inline, specialize]
+def fragment : m String := manyChars (pchar' <|> char '/' <|> char '?')
 
-public def uri : Parser Uri := do
+@[specialize]
+public def uri : m Uri := do
   let scheme ← scheme
   skipChar ':'
   let (auth?, path) ← hier_part
@@ -276,7 +333,8 @@ public def uri : Parser Uri := do
     fragment
   return { scheme? := some scheme, path, authority? := auth?, query?, fragment? }
 
-def absolute_uri : Parser Uri := do
+@[specialize]
+def absolute_uri : m Uri := do
   let scheme ← scheme
   skipChar ':'
   let (auth?, path) ← hier_part
@@ -285,7 +343,8 @@ def absolute_uri : Parser Uri := do
     query
   return { scheme? := some scheme, path, authority? := auth?, query?, fragment? := none }
 
-def relative_part : Parser (Option Authority × String) := do
+@[specialize]
+def relative_part : m (Option Authority × String) := do
   let ss := do
     skipString "//"
     let auth ← authority
@@ -293,7 +352,8 @@ def relative_part : Parser (Option Authority × String) := do
     return (some auth, path)
   ss <|> (path_absolute <&> (none, ·)) <|> (path_noscheme <&> (none, ·)) <|> (pure (none, ""))
 
-def relative_ref : Parser Uri := do
+@[specialize]
+def relative_ref : m Uri := do
   let (auth?, path) ← relative_part
   let query? ← optional do
     skipChar '?'
@@ -304,6 +364,3 @@ def relative_ref : Parser Uri := do
   return { scheme? := none, path, authority? := auth?, query?, fragment? }
 
 end Uri.Parser
-
-open Std.Internal.Parsec Std.Internal.Parsec.String in
-public def Uri.parse : String → Except String Uri := fun s => Parser.run (Parser.uri <* eof) s
