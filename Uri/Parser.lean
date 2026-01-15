@@ -68,15 +68,27 @@ private def decode_hex : Char → Nat := fun c =>
     panic! "invalid character"
 
 @[specialize]
-def pct_encoded : m Char := do
+def pct_encoded : m String := do
   skipChar '%'
-  let a ← decode_hex <$> hexDigit
-  let b ← decode_hex <$> hexDigit
-  let h := a * 16 + b
-  return Char.ofNat h
+  let a ← hexDigit
+  let b ← hexDigit
+  return s!"%{a}{b}"
+
+@[always_inline]
+private def c2s : Char → String := fun c => String.ofList [c]
+
+@[always_inline, specialize]
+private def many_concat (x : m String) : m String := do
+  let xs ← many x
+  return String.intercalate "" xs.toList
+
+@[always_inline, specialize]
+private def many1_concat (x : m String) : m String := do
+  let xs ← many1 x
+  return String.intercalate "" xs.toList
 
 @[specialize]
-def pchar' : m Char := unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches ':' | '@'
+def pchar' : m String := c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims <|> c2s <$> satisfy fun c => c matches ':' | '@'
 
 @[specialize]
 def scheme : m String := do
@@ -85,13 +97,13 @@ def scheme : m String := do
   return String.ofList (l :: t.toList)
 
 @[always_inline, specialize]
-def segment : m String := manyChars pchar'
+def segment : m String := many_concat pchar'
 
 @[always_inline, specialize]
-def segment_nz : m String := many1Chars pchar'
+def segment_nz : m String := many1_concat pchar'
 
 @[always_inline, specialize]
-def segment_nz_nc : m String := many1Chars <| unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches '@'
+def segment_nz_nc : m String := many1_concat <| c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims <|> c2s <$> satisfy fun c => c matches '@'
 
 @[specialize]
 def path_abempty : m String := do
@@ -129,7 +141,7 @@ def path_rootless : m String := do
 
 @[inline, specialize]
 def userinfo : m String := do
-  manyChars <| unreserved <|> pct_encoded <|> sub_delims <|> satisfy fun c => c matches ':'
+  many_concat <| c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims <|> c2s <$> satisfy fun c => c matches ':'
 
 @[inline, specialize]
 private def takeUpTo (n : Nat) (p : m α) : m (Array α) :=
@@ -276,7 +288,7 @@ def ip_literal : m Host := do
   return inner
 
 @[specialize]
-def reg_name : m String := manyChars (unreserved <|> pct_encoded <|> sub_delims)
+def reg_name : m String := many_concat (c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims)
 
 @[specialize]
 public def host : m Host :=
@@ -315,10 +327,10 @@ public def hier_part : m (Option Authority × String) := do
   ss <|> (path_absolute <&> (none, ·)) <|> (path_rootless <&> (none, ·)) <|> (pure (none, ""))
 
 @[always_inline, specialize]
-def query : m String := manyChars (pchar' <|> char '/' <|> char '?')
+def query : m String := many_concat (pchar' <|> c2s <$> char '/' <|> c2s <$> char '?')
 
 @[always_inline, specialize]
-def fragment : m String := manyChars (pchar' <|> char '/' <|> char '?')
+def fragment : m String := many_concat (pchar' <|> c2s <$> char '/' <|> c2s <$> char '?')
 
 @[specialize]
 public def uri : m Uri := do
