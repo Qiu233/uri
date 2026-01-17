@@ -297,17 +297,18 @@ public def host : m Host :=
   <|> (Host.regName <$> reg_name)
 
 @[specialize]
-def port? : m (Option UInt16) := do
-  let v ← manyChars (satisfy Char.isDigit)
-  if v.length == 0 then
-    return none
+def port : m UInt16 := do
+  let v ← many1Chars (satisfy Char.isDigit)
   let xs := v.toList
   let xs := xs.map fun x => x.toNat - '0'.toNat
   let x :: xs := xs | unreachable!
   let val := xs.foldl (init := x) fun acc t => acc * 10 + t
   if val ≥ 2 ^ 16 then
     fail "port too large"
-  return some (UInt16.ofNat val)
+  return UInt16.ofNat val
+
+@[always_inline, specialize]
+def port? : m (Option UInt16) := optional port
 
 @[specialize]
 public def authority : m Authority := do
