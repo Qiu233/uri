@@ -10,12 +10,16 @@ section
 @[always_inline]
 local instance : Uri.Parser.MonadParser Parser where
   satisfy := satisfy
+  pchar := pchar
+  pstring := pstring
   skipChar := skipChar
   skipString := skipString
   attempt := attempt
   optional := optional
   many := many
   many1 := many1
+  manyChars := manyChars
+  many1Chars := many1Chars
   fail := fail
   notFollowedBy := notFollowedBy
 

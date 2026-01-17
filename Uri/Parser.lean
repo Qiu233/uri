@@ -14,12 +14,16 @@ namespace Uri.Parser
 /-- The primitive effects required to implement uri parser. Some of them are overlapping for performance. -/
 class MonadParser (m : Type → Type) where
   satisfy : (Char → Bool) → m Char
+  pchar : Char → m Char
+  pstring : String → m String
   skipChar : Char → m Unit
   skipString : String → m Unit
   attempt : m α → m α
   optional : m α → m (Option α)
   many : m α → m (Array α)
   many1 : m α → m (Array α)
+  manyChars : m Char → m String
+  many1Chars : m Char → m String
   fail : String → m α
   notFollowedBy : m α → m Unit
 
@@ -30,16 +34,6 @@ open MonadParser
 @[always_inline, specialize]
 private def digitRange (lo hi : Char) : m Char :=
   satisfy fun c => c >= lo && c <= hi
-
-@[always_inline, specialize]
-private def manyChars (x : m Char) : m String := do
-  let cs ← many x
-  return String.ofList cs.toList
-
-@[always_inline, specialize]
-private def many1Chars (x : m Char) : m String := do
-  let cs ← many1 x
-  return String.ofList cs.toList
 
 @[always_inline, specialize]
 private def hexDigit : m Char := satisfy fun c =>
