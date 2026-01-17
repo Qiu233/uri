@@ -26,6 +26,7 @@ class MonadParser (m : Type → Type) where
   many1Chars : m Char → m String
   fail : String → m α
   notFollowedBy : m α → m Unit
+  peek? : m (Option Char)
 
 variable [Monad m] [∀ α, OrElse (m α)] [MonadParser m]
 

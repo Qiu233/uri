@@ -22,6 +22,7 @@ local instance : Uri.Parser.MonadParser Parser where
   many1Chars := many1Chars
   fail := fail
   notFollowedBy := notFollowedBy
+  peek? := peek?
 
 /-- parses RFC 3986 `URI` -/
 public def Uri.parse : String → Except String Uri := fun s => Parser.run (Uri.Parser.uri (m := Parser) <* eof) s
