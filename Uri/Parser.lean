@@ -28,7 +28,7 @@ class MonadParser (m : Type → Type) where
   notFollowedBy : m α → m Unit
   peek? : m (Option Char)
 
-variable [Monad m] [∀ α, OrElse (m α)] [MonadParser m]
+variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : MonadParser m]
 
 open MonadParser
 
