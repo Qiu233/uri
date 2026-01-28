@@ -1,5 +1,15 @@
 {"version": "1.1.0",
  "packagesDir": ".lake/packages",
- "packages": [],
+ "packages":
+ [{"url": "https://github.com/Qiu233/PolyParsec",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "a9c228aab7b9ec043693b903ad73dfcd00855eb9",
+   "name": "PolyParsec",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": null,
+   "inherited": false,
+   "configFile": "lakefile.lean"}],
  "name": "uri",
  "lakeDir": ".lake"}

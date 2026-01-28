@@ -1,6 +1,7 @@
 module
 
 public import Uri.Basic
+public import PolyParsec
 
 /-!
 [RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986)
@@ -11,26 +12,9 @@ public section
 
 namespace Uri.Parser
 
-/-- The primitive effects required to implement uri parser. Some of them are overlapping for performance. -/
-class MonadParser (m : Type → Type) where
-  satisfy : (Char → Bool) → m Char
-  pchar : Char → m Char
-  pstring : String → m String
-  skipChar : Char → m Unit
-  skipString : String → m Unit
-  attempt : m α → m α
-  optional : m α → m (Option α)
-  many : m α → m (Array α)
-  many1 : m α → m (Array α)
-  manyChars : m Char → m String
-  many1Chars : m Char → m String
-  fail : String → m α
-  notFollowedBy : m α → m Unit
-  peek? : m (Option Char)
+variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : MonadParser m]
-
-open MonadParser
+open PolyParsec
 
 @[always_inline, specialize]
 private def digitRange (lo hi : Char) : m Char :=
