@@ -11,4 +11,4 @@ lean_lib «Uri» where
 lean_exe uriTests where
   root := `Uri.Tests
 
-require PolyParsec from git "https://github.com/Qiu233/PolyParsec"
+require binary from git "https://github.com/Lean-zh/binary"

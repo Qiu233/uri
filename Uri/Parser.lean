@@ -1,7 +1,7 @@
 module
 
 public import Uri.Basic
-public import PolyParsec
+public import Binary
 
 /-!
 [RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986)
@@ -12,30 +12,29 @@ public section
 
 namespace Uri.Parser
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
+open Binary UTF8
 
-open PolyParsec
-
-@[always_inline, specialize]
-private def digitRange (lo hi : Char) : m Char :=
+@[always_inline]
+private def digitRange (lo hi : Char) : Get Char :=
   satisfy fun c => c >= lo && c <= hi
 
-@[always_inline, specialize]
-private def hexDigit : m Char := satisfy fun c =>
+@[always_inline]
+private def hexDigit : Get Char := satisfy fun c =>
   c.isDigit || ('A' ≤ c && c ≤ 'F') || ('a' ≤ c && c ≤ 'f')
 
-@[always_inline, specialize]
-def unreserved : m Char := satisfy fun c => c.isAlphanum || c matches '-' | '.' | '_' | '~'
+@[always_inline]
+def unreserved : Get Char := satisfy fun c => c.isAlphanum || c matches '-' | '.' | '_' | '~'
 
-@[always_inline, specialize]
-def gen_delims : m Char := satisfy fun c => c matches ':' | '/' | '?' | '#' | '[' | ']' | '@'
+@[always_inline]
+def gen_delims : Get Char := satisfy fun c => c matches ':' | '/' | '?' | '#' | '[' | ']' | '@'
 
-@[always_inline, specialize]
-def sub_delims : m Char := satisfy fun c => c matches '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
+@[always_inline]
+def sub_delims : Get Char := satisfy fun c => c matches '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
 
-@[always_inline, specialize]
-def reserved : m Char := gen_delims <|> sub_delims
+@[always_inline]
+def reserved : Get Char := gen_delims <|> sub_delims
 
+@[inline]
 private def decode_hex : Char → Nat := fun c =>
   if c.isDigit then
     (c.toNat - '0'.toNat)
@@ -46,8 +45,8 @@ private def decode_hex : Char → Nat := fun c =>
   else
     panic! "invalid character"
 
-@[specialize]
-def pct_encoded : m String := do
+@[always_inline]
+def pct_encoded : Get String := do
   skipChar '%'
   let a ← hexDigit
   let b ← hexDigit
@@ -57,41 +56,42 @@ def pct_encoded : m String := do
 private def c2s : Char → String := fun c => String.ofList [c]
 
 @[always_inline, specialize]
-private def many_concat (x : m String) : m String := do
+private def many_concat (x : Get String) : Get String := do
   let xs ← many x
   return String.intercalate "" xs.toList
 
 @[always_inline, specialize]
-private def many1_concat (x : m String) : m String := do
+private def many1_concat (x : Get String) : Get String := do
   let xs ← many1 x
   return String.intercalate "" xs.toList
 
-@[specialize]
-def pchar' : m String := c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims <|> c2s <$> satisfy fun c => c matches ':' | '@'
+@[always_inline]
+def pchar' : Get String := c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims <|> c2s <$> satisfy fun c => c matches ':' | '@'
 
-@[specialize]
-def scheme : m String := do
+@[always_inline]
+def scheme : Get String := do
   let l ← satisfy Char.isAlpha
   let t ← manyChars (satisfy fun c => c.isAlphanum || c matches '+' | '-' | '.')
   return String.ofList (l :: t.toList)
 
-@[always_inline, specialize]
-def segment : m String := many_concat pchar'
+@[always_inline]
+def segment : Get String := many_concat pchar'
 
-@[always_inline, specialize]
-def segment_nz : m String := many1_concat pchar'
+@[always_inline]
+def segment_nz : Get String := many1_concat pchar'
 
-@[always_inline, specialize]
-def segment_nz_nc : m String := many1_concat <| c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims <|> c2s <$> satisfy fun c => c matches '@'
+@[always_inline]
+def segment_nz_nc : Get String :=
+  many1_concat <| c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims <|> c2s <$> satisfy fun c => c matches '@'
 
-@[specialize]
-def path_abempty : m String := do
+@[always_inline]
+def path_abempty : Get String := do
   let xs ← many (skipChar '/' *> segment)
   let xs := xs.map fun x => s!"/{x}"
   return String.intercalate "" xs.toList
 
-@[specialize]
-def path_absolute : m String := do
+@[always_inline]
+def path_absolute : Get String := do
   skipChar '/'
   match ← optional segment_nz with
   | none => return "/"
@@ -102,46 +102,28 @@ def path_absolute : m String := do
     let xs := l :: xs.toList
     return String.intercalate "" xs
 
-@[specialize]
-def path_noscheme : m String := do
+@[always_inline]
+def path_noscheme : Get String := do
   let l ← segment_nz_nc
   let xs ← many (skipChar '/' *> segment)
   let xs := xs.map fun x => s!"/{x}"
   let xs := l :: xs.toList
   return String.intercalate "" xs
 
-@[specialize]
-def path_rootless : m String := do
+@[always_inline]
+def path_rootless : Get String := do
   let l ← segment_nz
   let xs ← many (skipChar '/' *> segment)
   let xs := xs.map fun x => s!"/{x}"
   let xs := l :: xs.toList
   return String.intercalate "" xs
 
-@[inline, specialize]
-def userinfo : m String := do
+@[always_inline]
+def userinfo : Get String := do
   many_concat <| c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims <|> c2s <$> satisfy fun c => c matches ':'
 
-@[inline, specialize]
-private def takeUpTo (n : Nat) (p : m α) : m (Array α) :=
-  rest n #[]
-where
-  rest : Nat → Array α → m (Array α)
-    | 0, xs => return xs
-    | n+1, xs => do
-      match ← optional (attempt p) with
-      | some x => rest n <| xs.push x
-      | none => return xs
-
-@[inline, specialize]
-def take (n : Nat) (p : m α) : m (Array α) := attempt <| rest n #[]
-where
-  rest : Nat → Array α → m (Array α)
-    | 0, xs => return xs
-    | n+1, xs => do rest n <| xs.push (← p)
-
-@[specialize]
-def h16 : m UInt16 := do
+@[inline]
+def h16 : Get UInt16 := do
   let first ← hexDigit
   let rest ← takeUpTo 3 hexDigit
   let xs := first :: rest.toList
@@ -151,8 +133,8 @@ def h16 : m UInt16 := do
   assert! val < 2 ^ 16
   return UInt16.ofNat val
 
-@[specialize]
-def dec_octet : m UInt8 := do
+@[inline]
+def dec_octet : Get UInt8 := do
   let s ← many1Chars <| satisfy fun c => c.isDigit
   if s.length > 1 && s.startsWith "0" then
     fail "leading zeros are not valid in IPv4 octets"
@@ -165,8 +147,8 @@ def dec_octet : m UInt8 := do
     fail "IPv4 octet is out of range"
   return UInt8.ofNat val
 
-@[specialize]
-def ipv4address : m Std.Net.IPv4Addr := do
+@[always_inline]
+def ipv4address : Get Std.Net.IPv4Addr := do
   let a ← dec_octet
   skipChar '.'
   let b ← dec_octet
@@ -176,50 +158,26 @@ def ipv4address : m Std.Net.IPv4Addr := do
   let d ← dec_octet
   return Std.Net.IPv4Addr.ofParts a b c d
 
-@[specialize]
-def ls32 : m (UInt16 × UInt16) :=
-  (attempt do
+def ls32 : Get (UInt16 × UInt16) :=
+  (do
     let a ← h16
     skipChar ':'
     let b ← h16
     return (a, b))
-    <|> (ipv4address >>= fun x => return (x.octets[0].toUInt16 * (256 : UInt16) + x.octets[1].toUInt16, x.octets[2].toUInt16 * (256 : UInt16) + x.octets[3].toUInt16))
+  <|> (ipv4address >>= fun x =>
+    return (x.octets[0].toUInt16 * (256 : UInt16) + x.octets[1].toUInt16,
+      x.octets[2].toUInt16 * (256 : UInt16) + x.octets[3].toUInt16))
 
-@[always_inline, specialize]
-private def char : Char → m Char := fun c => satisfy (· == c)
+@[always_inline]
+private def char : Char → Get Char := fun c => satisfy (· == c)
 
-@[specialize]
-private def sep1 (x : m α) (s : m Unit) : m (Array α) := do
-  let l ← x
-  let mut t := #[l]
-  repeat
-    if let some v ← optional (attempt (s *> x)) then
-      t := t.push v
-    else break
-  return t
-
-@[specialize]
-private def sep1UpTo (n : Nat) (x : m α) (s : m Unit) : m (Array α) := do
-  let l ← x
-  let mut t := #[l]
-  repeat
-    if t.size ≥ n then break
-    if let some v ← optional (attempt (s *> x)) then
-      t := t.push v
-    else break
-  return t
-
-@[specialize]
-private def sepUpTo (n : Nat) (x : m α) (s : m Unit) : m (Array α) := attempt (sep1UpTo n x s) <|> (pure #[])
-
-@[specialize]
-def ipv6address : m Std.Net.IPv6Addr := do
+def ipv6address : Get Std.Net.IPv6Addr := do
   let ret (t : Array UInt16) := do
     if h : t.size = 8 then
       return { segments := ⟨t, h⟩ : Std.Net.IPv6Addr }
     else
       unreachable!
-  let t ← sepUpTo 8 (h16 <* notFollowedBy (char '.')) (skipChar ':')
+  let t ← sepByUpTo 8 (h16 <* notFollowedBy (char '.')) (skipChar ':')
   if t.size == 8 then
     ret t
   else if t.size == 7 then
@@ -232,17 +190,17 @@ def ipv6address : m Std.Net.IPv6Addr := do
       ret <| t.push 0 |>.push a)
     <|> (do
       skipChar ':'
-      let (a, b) ← ls32 -- ipv4
+      let (a, b) ← ls32
       ret <| t.push a |>.push b)
   else
     skipString "::"
-    let r ← sepUpTo (7 - t.size) (h16  <* notFollowedBy (char '.')) (skipChar ':')
+    let r ← sepByUpTo (7 - t.size) (h16  <* notFollowedBy (char '.')) (skipChar ':')
     if r.size == 7 - t.size then
       ret <| t.push 0 |>.append r
     else if r.size == 6 - t.size then
       ret <| t.append #[0, 0] |>.append r
     else
-      (attempt do
+      (do
         skipChar ':'
         let (a, b) ← ls32 -- ipv4
         let pad := 8 - t.size - r.size - 2
@@ -251,32 +209,32 @@ def ipv6address : m Std.Net.IPv6Addr := do
         let pad := 8 - t.size - r.size
         ret <| t.append (Array.replicate pad 0) |>.append r)
 
-@[specialize]
-def ipv_future : m String := do
+@[inline]
+def ipv_future : Get String := do
   skipChar 'v'
   let version ← many1Chars hexDigit
   skipChar '.'
-  let body ← many1Chars (unreserved <|> sub_delims <|> char ':')
-  return "v" ++ version ++ "." ++ body
+  let addr ← many1Chars <| satisfy fun c =>
+    c.isAlphanum || c matches '.' | '-' | '_' | '~' | '!' | '$' | '&' | '\'' | '(' | ')' |
+      '*' | '+' | ',' | ';' | '=' | ':'
+  return s!"v{version}.{addr}"
+
+@[inline]
+def ip_literal : Get Host := do
+  skipChar '['
+  let host ← (Host.ipv6 <$> ipv6address) <|> (Host.ipvFuture <$> ipv_future)
+  skipChar ']'
+  return host
+
+@[always_inline]
+def reg_name : Get String := many_concat (c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims)
+
+@[always_inline]
+def host : Get Host :=
+  (ip_literal) <|> (Host.ipv4 <$> ipv4address) <|> (Host.regName <$> reg_name)
 
 @[specialize]
-def ip_literal : m Host := do
-  let _ ← char '['
-  let inner ← attempt (Host.ipv6 <$> ipv6address) <|> Host.ipvFuture <$> ipv_future
-  let _ ← char ']'
-  return inner
-
-@[specialize]
-def reg_name : m String := many_concat (c2s <$> unreserved <|> pct_encoded <|> c2s <$> sub_delims)
-
-@[specialize]
-public def host : m Host :=
-  attempt ip_literal
-  <|> (attempt (Host.ipv4 <$> ipv4address))
-  <|> (Host.regName <$> reg_name)
-
-@[specialize]
-def port : m UInt16 := do
+def port : Get UInt16 := do
   let v ← many1Chars (satisfy Char.isDigit)
   let xs := v.toList
   let xs := xs.map fun x => x.toNat - '0'.toNat
@@ -286,34 +244,34 @@ def port : m UInt16 := do
     fail "port too large"
   return UInt16.ofNat val
 
-@[always_inline, specialize]
-def port? : m (Option UInt16) := optional port
+@[always_inline]
+def port? : Get (Option UInt16) := optional port
 
-@[specialize]
-public def authority : m Authority := do
-  let ui? ← optional <| attempt (userinfo <* skipChar '@')
+@[inline]
+def authority : Get Authority := do
+  let userInfo? ← optional (userinfo <* skipChar '@')
   let host ← host
-  let port? ← optional <| attempt (skipChar ':' *> port?)
-  let port? := port?.join
-  return { userInfo? := ui?, host, port? }
+  let port? ← optional (skipChar ':' *> port)
+  return { userInfo?, host, port? }
 
-@[specialize]
-public def hier_part : m (Option Authority × String) := do
-  let ss := do
+@[inline]
+def hier_part : Get (Option Authority × String) := do
+  (do
     skipString "//"
     let auth ← authority
     let path ← path_abempty
-    return (some auth, path)
-  ss <|> (path_absolute <&> (none, ·)) <|> (path_rootless <&> (none, ·)) <|> (pure (none, ""))
+    return (some auth, path))
+  <|> (path_absolute >>= fun x => return (none, x))
+  <|> (path_rootless >>= fun x => return (none, x))
+  <|> (pure (none, ""))
 
-@[always_inline, specialize]
-def query : m String := many_concat (pchar' <|> c2s <$> char '/' <|> c2s <$> char '?')
+@[always_inline]
+def query : Get String := many_concat (pchar' <|> c2s <$> char '/' <|> c2s <$> char '?')
 
-@[always_inline, specialize]
-def fragment : m String := many_concat (pchar' <|> c2s <$> char '/' <|> c2s <$> char '?')
+@[always_inline]
+def fragment : Get String := many_concat (pchar' <|> c2s <$> char '/' <|> c2s <$> char '?')
 
-@[specialize]
-public def uri : m Uri := do
+def uri : Get Uri := do
   let scheme ← scheme
   skipChar ':'
   let (auth?, path) ← hier_part
@@ -325,27 +283,26 @@ public def uri : m Uri := do
     fragment
   return { scheme? := some scheme, path, authority? := auth?, query?, fragment? }
 
-@[specialize]
-def absolute_uri : m Uri := do
+def absolute_uri : Get Uri := do
   let scheme ← scheme
   skipChar ':'
   let (auth?, path) ← hier_part
   let query? ← optional do
     skipChar '?'
     query
-  return { scheme? := some scheme, path, authority? := auth?, query?, fragment? := none }
+  return { scheme? := some scheme, authority? := auth?, path, query? }
 
-@[specialize]
-def relative_part : m (Option Authority × String) := do
-  let ss := do
+def relative_part : Get (Option Authority × String) := do
+  (do
     skipString "//"
     let auth ← authority
     let path ← path_abempty
-    return (some auth, path)
-  ss <|> (path_absolute <&> (none, ·)) <|> (path_noscheme <&> (none, ·)) <|> (pure (none, ""))
+    return (some auth, path))
+  <|> (path_absolute >>= fun x => return (none, x))
+  <|> (path_noscheme >>= fun x => return (none, x))
+  <|> (pure (none, ""))
 
-@[specialize]
-def relative_ref : m Uri := do
+def relative_ref : Get Uri := do
   let (auth?, path) ← relative_part
   let query? ← optional do
     skipChar '?'
@@ -353,9 +310,19 @@ def relative_ref : m Uri := do
   let fragment? ← optional do
     skipChar '#'
     fragment
-  return { scheme? := none, path, authority? := auth?, query?, fragment? }
+  return { scheme? := none, authority? := auth?, path, query?, fragment? }
 
-@[always_inline, specialize]
-def uri_reference : m Uri := attempt uri <|> relative_ref
+@[always_inline]
+def uri_reference : Get Uri := uri <|> relative_ref
+
+@[always_inline]
+def uri_host : Get Host := host
+
+@[always_inline]
+def absolute_path : Get String := do
+  let ss ← many1 (skipChar '/' *> segment)
+  return String.intercalate "" <| ss.toList.map (fun x => s!"/{x}")
 
 end Uri.Parser
+
+end
